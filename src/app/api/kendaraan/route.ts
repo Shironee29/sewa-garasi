@@ -2,6 +2,19 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
 import { supabaseAdmin } from '@/lib/supabase';
 
+function normalizePlatNomor(input: string): string {
+  // Hapus semua spasi & ubah ke huruf kapital
+  const compact = input.replace(/\s+/g, '').toUpperCase();
+
+  // Format otomatis pola plat Indonesia (contoh: L1234AB -> L 1234 AB)
+  const match = compact.match(/^([A-Z]{1,2})(\d{1,4})([A-Z]{0,3})$/);
+  if (match) {
+    return [match[1], match[2], match[3]].filter(Boolean).join(' ');
+  }
+
+  return compact;
+}
+
 export async function GET() {
   const session = await getSession();
   if (!session) {
@@ -39,11 +52,39 @@ export async function POST(request: Request) {
       );
     }
 
-    if (tipe !== 'SEPEDA' && !no_plat) {
-      return NextResponse.json(
-        { error: 'Nomor plat wajib diisi untuk kendaraan bermotor.' },
-        { status: 400 }
+    let formattedPlat: string | null = null;
+
+    if (tipe !== 'SEPEDA') {
+      if (!no_plat || !String(no_plat).trim()) {
+        return NextResponse.json(
+          { error: 'Nomor plat wajib diisi untuk kendaraan bermotor.' },
+          { status: 400 }
+        );
+      }
+
+      formattedPlat = normalizePlatNomor(String(no_plat));
+
+      // Cek apakah nomor plat sudah terdaftar (bandingkan tanpa spasi)
+      const compactBaru = formattedPlat.replace(/\s+/g, '');
+      const { data: existingList, error: checkError } = await supabaseAdmin
+        .from('kendaraan')
+        .select('id, no_plat')
+        .not('no_plat', 'is', null);
+
+      if (checkError) {
+        return NextResponse.json({ error: checkError.message }, { status: 500 });
+      }
+
+      const isDuplicate = (existingList ?? []).some(
+        (item) => item.no_plat?.replace(/\s+/g, '').toUpperCase() === compactBaru
       );
+
+      if (isDuplicate) {
+        return NextResponse.json(
+          { error: `Nomor plat ${formattedPlat} sudah terdaftar.` },
+          { status: 409 }
+        );
+      }
     }
 
     if (tipe === 'MOBIL_LISTRIK') {
@@ -62,7 +103,7 @@ export async function POST(request: Request) {
       .insert({
         penyewa_id: session.userId,
         tipe,
-        no_plat: no_plat ? String(no_plat).trim().toUpperCase() : null,
+        no_plat: formattedPlat,
         merek_tipe: String(merek_tipe).trim(),
         kapasitas_max_kwh: tipe === 'MOBIL_LISTRIK' ? Number(kapasitas_max_kwh) : null,
         baterai_terakhir_kwh: tipe === 'MOBIL_LISTRIK' ? Number(baterai_terakhir_kwh) : null,
