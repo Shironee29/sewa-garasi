@@ -41,7 +41,7 @@ export class Garasi {
    * Harga sewa bulanan (asumsi 30 hari dengan potongan 10%, ubah pengali jika soal menentukan tarif khusus).
    */
   public getHargaBulanan(): number {
-    return Math.round(this.hargaHarian * 30 * 0.9);
+    return this.hargaHarian * 25;
   }
 
   public ubahStatus(status: StatusGarasi): void {

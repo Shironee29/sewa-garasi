@@ -40,16 +40,33 @@ export class GaragePricingService implements PricingCalculator {
   }
 
   /**
-   * Mengembalikan batas maksimal hari untuk sewa HARIAN berdasarkan jumlah hari pada bulan tglMulai.
-   * Contoh: bulan 31 hari -> maks 30 hari; bulan 30 hari -> maks 29 hari; Februari 28 hari -> maks 27 hari.
+   * Mengembalikan jumlah hari pada bulan tglMulai (otomatis mendeteksi tahun kabisat).
+   * Contoh: Feb 2026 -> 28, Feb 2028 -> 29, Nov 2026 -> 30, Des 2026 -> 31.
+   */
+  public getJumlahHariBulan(tglMulai: Date): number {
+    return new Date(tglMulai.getFullYear(), tglMulai.getMonth() + 1, 0).getDate();
+  }
+
+  /**
+   * Batas maksimal sewa HARIAN = (jumlah hari bulan tglMulai) - 1.
+   * Contoh: Nov (30 hari) -> maks 29 hari; Feb non-kabisat (28 hari) -> maks 27 hari.
    */
   public getBatasMaksimalHarian(tglMulai: Date): number {
-    const jumlahHariBulanIni = new Date(
+    return this.getJumlahHariBulan(tglMulai) - 1;
+  }
+
+  /**
+   * Helper untuk form UI: menghitung tglSelesai otomatis jika penyewa memilih paket 1 BULAN.
+   * Contoh: 21 Nov 2026 (+30 hari) -> 21 Des 2026; 2 Feb 2026 (+28 hari) -> 2 Mar 2026.
+   */
+  public hitungTanggalSelesaiBulanan(tglMulai: Date): Date {
+    const durasiBulanIni = this.getJumlahHariBulan(tglMulai);
+    const tglSelesai = new Date(
       tglMulai.getFullYear(),
-      tglMulai.getMonth() + 1,
-      0
-    ).getDate();
-    return jumlahHariBulanIni - 1;
+      tglMulai.getMonth(),
+      tglMulai.getDate() + durasiBulanIni
+    );
+    return tglSelesai;
   }
 
   public hitungSelisihHari(tglMulai: Date, tglSelesai: Date): number {
@@ -65,7 +82,7 @@ export class GaragePricingService implements PricingCalculator {
   }
 
   /**
-   * Menghitung rincian lengkap (biaya sewa, biaya listrik EV, dan total).
+   * Menghitung rincian lengkap (tipe sewa, durasi hari, biaya sewa, biaya listrik EV, dan total).
    */
   public hitungRincianSewa(
     garasi: Garasi,
@@ -81,15 +98,22 @@ export class GaragePricingService implements PricingCalculator {
     }
 
     const jumlahHari = this.hitungSelisihHari(tglMulai, tglSelesai);
+    const durasiSatuBulan = this.getJumlahHariBulan(tglMulai);
     const batasHarian = this.getBatasMaksimalHarian(tglMulai);
 
-    // Tentukan tipe sewa otomatis jika tidak dikirim secara eksplisit
+    // Jika jumlah hari >= jumlah hari di bulan tglMulai, otomatis masuk paket BULANAN
     const tipeFinal: TipeSewa =
-      tipeSewa ?? (jumlahHari > batasHarian ? 'BULANAN' : 'HARIAN');
+      tipeSewa ?? (jumlahHari >= durasiSatuBulan ? 'BULANAN' : 'HARIAN');
 
     if (tipeFinal === 'HARIAN' && jumlahHari > batasHarian) {
       throw new Error(
-        `Sewa harian pada bulan ini maksimal ${batasHarian} hari. Gunakan paket BULANAN.`
+        `Sewa harian pada bulan ini maksimal ${batasHarian} hari. Jika ${durasiSatuBulan} hari atau lebih, gunakan paket BULANAN.`
+      );
+    }
+
+    if (tipeFinal === 'BULANAN' && jumlahHari < durasiSatuBulan) {
+      throw new Error(
+        `Sewa bulanan pada bulan ini minimal ${durasiSatuBulan} hari.`
       );
     }
 
@@ -97,8 +121,12 @@ export class GaragePricingService implements PricingCalculator {
     if (tipeFinal === 'HARIAN') {
       biayaSewa = jumlahHari * garasi.getHargaHarian();
     } else {
-      const jumlahBulan = Math.max(1, Math.ceil(jumlahHari / 30));
-      biayaSewa = jumlahBulan * garasi.getHargaBulanan();
+      // Hitung blok bulan penuh (kelipatan durasiSatuBulan) + sisa hari jika ada
+      const jumlahBulanPenuh = Math.floor(jumlahHari / durasiSatuBulan);
+      const sisaHari = jumlahHari % durasiSatuBulan;
+      biayaSewa =
+        jumlahBulanPenuh * garasi.getHargaBulanan() +
+        sisaHari * garasi.getHargaHarian();
     }
 
     let biayaListrik = 0;
@@ -126,12 +154,28 @@ export class GaragePricingService implements PricingCalculator {
     return this.hitungRincianSewa(garasi, kendaraan, tglMulai, tglSelesai, tipeSewa).totalBiaya;
   }
 
+  /**
+   * Menghitung sisa biaya perpanjangan oleh Admin.
+   * Jika tambahan hari mencapai 1 bulan penuh pada bulan tglSelesai lama, berlaku tarif bulanan.
+   */
   public hitungBiayaPerpanjangan(
     transaksi: TransaksiSewa,
     garasi: Garasi,
     tglBaru: Date
   ): number {
-    const tambahanHari = this.hitungSelisihHari(transaksi.getTglSelesai(), tglBaru);
+    const tglLama = transaksi.getTglSelesai();
+    const tambahanHari = this.hitungSelisihHari(tglLama, tglBaru);
+    const durasiSatuBulan = this.getJumlahHariBulan(tglLama);
+
+    if (tambahanHari >= durasiSatuBulan) {
+      const jumlahBulanPenuh = Math.floor(tambahanHari / durasiSatuBulan);
+      const sisaHari = tambahanHari % durasiSatuBulan;
+      return (
+        jumlahBulanPenuh * garasi.getHargaBulanan() +
+        sisaHari * garasi.getHargaHarian()
+      );
+    }
+
     return tambahanHari * garasi.getHargaHarian();
   }
 }
