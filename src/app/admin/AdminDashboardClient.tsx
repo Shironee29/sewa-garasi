@@ -382,7 +382,44 @@ export default function AdminDashboardClient() {
       (t) => t.status === 'ACTIVE' && t.tgl_mulai <= todayStr && t.tgl_selesai >= todayStr
     );
   }, [transaksiList, trxFilter, todayStr]);
+  const extendPreview = useMemo(() => {
+    if (!extendTarget || !tglSelesaiBaru) return null;
 
+    const [y1, m1, d1] = extendTarget.tgl_selesai.split('-').map(Number);
+    const [y2, m2, d2] = tglSelesaiBaru.split('-').map(Number);
+    const lama = new Date(y1, m1 - 1, d1);
+    const baru = new Date(y2, m2 - 1, d2);
+
+    const tambahanHari = Math.round((baru.getTime() - lama.getTime()) / (1000 * 60 * 60 * 24));
+    if (tambahanHari <= 0) {
+      return { error: 'Tanggal selesai baru harus setelah tanggal selesai saat ini.' };
+    }
+
+    const hargaHarian = Number(extendTarget.garasi?.harga_harian ?? 0);
+    let cursor = new Date(lama);
+    let jumlahBulan = 0;
+
+    while (true) {
+      const nextMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, cursor.getDate());
+      if (nextMonth <= baru) {
+        jumlahBulan += 1;
+        cursor = nextMonth;
+      } else {
+        break;
+      }
+    }
+
+    const sisaHari = Math.round((baru.getTime() - cursor.getTime()) / (1000 * 60 * 60 * 24));
+    const sisaBiaya = jumlahBulan * 25 * hargaHarian + sisaHari * hargaHarian;
+
+    return {
+      error: null,
+      tambahanHari,
+      jumlahBulan,
+      sisaHari,
+      sisaBiaya,
+    };
+  }, [extendTarget, tglSelesaiBaru]);
   if (loadingInit) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F5F5F7] text-sm text-[#86868B]">
@@ -1206,7 +1243,34 @@ export default function AdminDashboardClient() {
                   bulan penuh).
                 </p>
               </div>
-
+              {extendPreview &&
+                (extendPreview.error !== null ? (
+                  <div className="rounded-2xl bg-[#FF3B30]/10 px-4 py-3 text-xs font-medium text-[#D93025]">
+                    {extendPreview.error}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-black/[0.06] bg-[#F5F5F7] p-4 text-sm">
+                    <div className="flex items-center justify-between text-xs text-[#6E6E73]">
+                      <span>Tambahan Durasi</span>
+                      <span className="font-medium text-[#1D1D1F]">
+                        +{extendPreview.tambahanHari} hari
+                        {extendPreview.jumlahBulan > 0
+                          ? ` (${extendPreview.jumlahBulan} bln${
+                              extendPreview.sisaHari > 0 ? ` + ${extendPreview.sisaHari} hr` : ''
+                            })`
+                          : ''}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex items-baseline justify-between border-t border-black/[0.06] pt-2">
+                      <span className="text-xs font-semibold text-[#1D1D1F]">
+                        Sisa Biaya yang Harus Dibayar
+                      </span>
+                      <span className="text-lg font-semibold tracking-tight text-[#0071E3]">
+                        Rp {extendPreview.sisaBiaya.toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                  </div>
+                ))}
               <div>
                 <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
                   Bukti Pembayaran Perpanjangan (JPG/PNG/WEBP)
