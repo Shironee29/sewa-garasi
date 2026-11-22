@@ -15,15 +15,6 @@ interface UserProfile {
   status_ktp: StatusKtp;
 }
 
-interface KendaraanItem {
-  id: number;
-  tipe: TipeKendaraan;
-  no_plat: string | null;
-  merek_tipe: string;
-  kapasitas_max_kwh: number | null;
-  baterai_terakhir_kwh: number | null;
-}
-
 interface GarasiItem {
   id: number;
   kode_garasi: string;
@@ -82,52 +73,54 @@ function getTodayString(): string {
   return `${y}-${m}-${d}`;
 }
 
-function getTomorrowString(): string {
-  const now = new Date();
-  now.setDate(now.getDate() + 1);
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+function getAllowedGarasiTypes(tipeKendaraan: TipeKendaraan): TipeGarasi[] {
+  if (tipeKendaraan === 'SEPEDA' || tipeKendaraan === 'SEPEDA_MOTOR') {
+    return ['SEPEDA'];
+  }
+  if (tipeKendaraan === 'MOBIL') {
+    return ['MOBIL'];
+  }
+  return ['MOBIL', 'MOBIL_LISTRIK'];
 }
 
 export default function PenyewaDashboardClient() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'sewa' | 'kendaraan' | 'riwayat'>('sewa');
+  const [activeTab, setActiveTab] = useState<'sewa' | 'riwayat'>('sewa');
 
   const [user, setUser] = useState<UserProfile | null>(null);
-  const [kendaraanList, setKendaraanList] = useState<KendaraanItem[]>([]);
   const [garasiList, setGarasiList] = useState<GarasiItem[]>([]);
   const [transaksiList, setTransaksiList] = useState<TransaksiItem[]>([]);
   const [loadingInit, setLoadingInit] = useState(true);
   const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
-  // State Form Tambah Kendaraan
-  const [kForm, setKForm] = useState({
-    tipe: 'SEPEDA_MOTOR' as TipeKendaraan,
-    merek_tipe: '',
-    no_plat: '',
-    kapasitas_max_kwh: '',
-    baterai_terakhir_kwh: '',
-  });
-  const [submittingKendaraan, setSubmittingKendaraan] = useState(false);
+  // State Form Sewa Baru
+  const [tipeKendaraan, setTipeKendaraan] = useState<TipeKendaraan>('SEPEDA_MOTOR');
+  const [merekTipe, setMerekTipe] = useState('');
+  const [noPlat, setNoPlat] = useState('');
+  const [kapasitasMaxKwh, setKapasitasMaxKwh] = useState('');
+  const [sisaBateraiPersen, setSisaBateraiPersen] = useState('0');
 
-  // State Form Sewa Garasi
-  const [selectedKendaraanId, setSelectedKendaraanId] = useState<string>('');
+  const [selectedTipeGarasi, setSelectedTipeGarasi] = useState<TipeGarasi>('SEPEDA');
   const [selectedGarasiId, setSelectedGarasiId] = useState<string>('');
   const [tipeSewa, setTipeSewa] = useState<TipeSewa>('HARIAN');
-  const [tglMulai, setTglMulai] = useState<string>(getTodayString());
-  const [tglSelesai, setTglSelesai] = useState<string>(getTomorrowString());
+  const [jumlahHari, setJumlahHari] = useState<string>('1');
   const [buktiFile, setBuktiFile] = useState<File | null>(null);
+
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [previewError, setPreviewError] = useState<string>('');
   const [submittingSewa, setSubmittingSewa] = useState(false);
 
+  const todayStr = useMemo(() => getTodayString(), []);
+  const maxDailyThisMonth = useMemo(() => {
+    const now = new Date();
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    return Math.min(30, daysInMonth - 1);
+  }, []);
+
   const loadAllData = useCallback(async () => {
     try {
-      const [meRes, kRes, gRes, tRes] = await Promise.all([
+      const [meRes, gRes, tRes] = await Promise.all([
         fetch('/api/auth/me'),
-        fetch('/api/kendaraan'),
         fetch('/api/garasi?status=AVAILABLE'),
         fetch('/api/transaksi'),
       ]);
@@ -135,10 +128,6 @@ export default function PenyewaDashboardClient() {
       if (meRes.ok) {
         const meData = await meRes.json();
         setUser(meData.user);
-      }
-      if (kRes.ok) {
-        const kData = await kRes.json();
-        setKendaraanList(kData.kendaraan ?? []);
       }
       if (gRes.ok) {
         const gData = await gRes.json();
@@ -157,39 +146,43 @@ export default function PenyewaDashboardClient() {
     loadAllData();
   }, [loadAllData]);
 
-  // Filter garasi yang cocok dengan tipe kendaraan yang dipilih
-  const selectedKendaraan = useMemo(
-    () => kendaraanList.find((k) => String(k.id) === selectedKendaraanId) ?? null,
-    [kendaraanList, selectedKendaraanId]
+  const allowedGarasiTypes = useMemo(
+    () => getAllowedGarasiTypes(tipeKendaraan),
+    [tipeKendaraan]
   );
 
-  const compatibleGarasi = useMemo(() => {
-    if (!selectedKendaraan) return [];
-    const targetTipe: TipeGarasi =
-      selectedKendaraan.tipe === 'SEPEDA' || selectedKendaraan.tipe === 'SEPEDA_MOTOR'
-        ? 'SEPEDA'
-        : selectedKendaraan.tipe === 'MOBIL'
-        ? 'MOBIL'
-        : 'MOBIL_LISTRIK';
-    return garasiList.filter((g) => g.tipe === targetTipe);
-  }, [garasiList, selectedKendaraan]);
-
-  // Reset pilihan garasi jika tidak lagi cocok dengan kendaraan yang baru dipilih
   useEffect(() => {
-    if (selectedGarasiId && !compatibleGarasi.some((g) => String(g.id) === selectedGarasiId)) {
+    if (!allowedGarasiTypes.includes(selectedTipeGarasi)) {
+      setSelectedTipeGarasi(allowedGarasiTypes[0]);
       setSelectedGarasiId('');
     }
-  }, [compatibleGarasi, selectedGarasiId]);
+  }, [allowedGarasiTypes, selectedTipeGarasi]);
 
-  // Hitung preview tarif real-time setiap kali input sewa berubah
+  const availableGarasiByType = useMemo(
+    () => garasiList.filter((g) => g.tipe === selectedTipeGarasi),
+    [garasiList, selectedTipeGarasi]
+  );
+
   useEffect(() => {
-    if (!selectedKendaraanId || !selectedGarasiId || !tglMulai) {
+    if (selectedGarasiId && !availableGarasiByType.some((g) => String(g.id) === selectedGarasiId)) {
+      setSelectedGarasiId('');
+    }
+  }, [availableGarasiByType, selectedGarasiId]);
+
+  useEffect(() => {
+    if (!selectedGarasiId) {
       setPreview(null);
       setPreviewError('');
       return;
     }
 
-    if (tipeSewa === 'HARIAN' && !tglSelesai) {
+    if (tipeKendaraan === 'MOBIL_LISTRIK' && !kapasitasMaxKwh) {
+      setPreview(null);
+      setPreviewError('Isi kapasitas listrik (kWh) untuk melihat estimasi biaya.');
+      return;
+    }
+
+    if (tipeSewa === 'HARIAN' && !jumlahHari) {
       setPreview(null);
       return;
     }
@@ -204,10 +197,12 @@ export default function PenyewaDashboardClient() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             garasi_id: Number(selectedGarasiId),
-            kendaraan_id: Number(selectedKendaraanId),
-            tgl_mulai: tglMulai,
-            tgl_selesai: tipeSewa === 'BULANAN' ? undefined : tglSelesai,
+            tipe_kendaraan: tipeKendaraan,
+            kapasitas_max_kwh: tipeKendaraan === 'MOBIL_LISTRIK' ? Number(kapasitasMaxKwh) : undefined,
+            sisa_baterai_persen:
+              tipeKendaraan === 'MOBIL_LISTRIK' ? Number(sisaBateraiPersen || 0) : undefined,
             tipe_sewa: tipeSewa,
+            jumlah_hari: tipeSewa === 'HARIAN' ? Number(jumlahHari) : undefined,
           }),
           signal: controller.signal,
         });
@@ -215,14 +210,10 @@ export default function PenyewaDashboardClient() {
         const data = await res.json();
         if (!res.ok) {
           setPreview(null);
-          setPreviewError(data.error || 'Kombinasi tanggal tidak valid.');
+          setPreviewError(data.error || 'Input tidak valid.');
           return;
         }
-
         setPreview(data);
-        if (tipeSewa === 'BULANAN') {
-          setTglSelesai(data.tgl_selesai);
-        }
       } catch (err) {
         if ((err as Error).name !== 'AbortError') {
           setPreviewError('Gagal menghitung estimasi biaya.');
@@ -232,66 +223,19 @@ export default function PenyewaDashboardClient() {
 
     fetchPreview();
     return () => controller.abort();
-  }, [selectedKendaraanId, selectedGarasiId, tipeSewa, tglMulai, tglSelesai]);
+  }, [
+    selectedGarasiId,
+    tipeKendaraan,
+    kapasitasMaxKwh,
+    sisaBateraiPersen,
+    tipeSewa,
+    jumlahHari,
+  ]);
 
   async function handleLogout() {
     await fetch('/api/auth/logout', { method: 'POST' });
     router.push('/login');
     router.refresh();
-  }
-
-  async function handleTambahKendaraan(e: React.FormEvent) {
-    e.preventDefault();
-    setFeedback(null);
-    setSubmittingKendaraan(true);
-
-    try {
-      const res = await fetch('/api/kendaraan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tipe: kForm.tipe,
-          merek_tipe: kForm.merek_tipe,
-          no_plat: kForm.tipe === 'SEPEDA' ? null : kForm.no_plat,
-          kapasitas_max_kwh: kForm.tipe === 'MOBIL_LISTRIK' ? Number(kForm.kapasitas_max_kwh) : null,
-          baterai_terakhir_kwh: kForm.tipe === 'MOBIL_LISTRIK' ? Number(kForm.baterai_terakhir_kwh) : null,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        setFeedback({ type: 'error', text: data.error || 'Gagal menambah kendaraan.' });
-        return;
-      }
-
-      setFeedback({ type: 'success', text: 'Kendaraan berhasil didaftarkan.' });
-      setKForm({
-        tipe: 'SEPEDA_MOTOR',
-        merek_tipe: '',
-        no_plat: '',
-        kapasitas_max_kwh: '',
-        baterai_terakhir_kwh: '',
-      });
-      await loadAllData();
-    } finally {
-      setSubmittingKendaraan(false);
-    }
-  }
-
-  async function handleHapusKendaraan(id: number) {
-    if (!confirm('Hapus kendaraan ini?')) return;
-    setFeedback(null);
-
-    const res = await fetch(`/api/kendaraan/${id}`, { method: 'DELETE' });
-    const data = await res.json();
-
-    if (!res.ok) {
-      setFeedback({ type: 'error', text: data.error || 'Gagal menghapus kendaraan.' });
-      return;
-    }
-
-    setFeedback({ type: 'success', text: 'Kendaraan berhasil dihapus.' });
-    await loadAllData();
   }
 
   async function handleSubmitSewa(e: React.FormEvent) {
@@ -307,10 +251,19 @@ export default function PenyewaDashboardClient() {
     try {
       const formData = new FormData();
       formData.append('garasi_id', selectedGarasiId);
-      formData.append('kendaraan_id', selectedKendaraanId);
-      formData.append('tgl_mulai', tglMulai);
-      formData.append('tgl_selesai', preview?.tgl_selesai ?? tglSelesai);
+      formData.append('tipe_kendaraan', tipeKendaraan);
+      formData.append('merek_tipe', merekTipe);
+      if (tipeKendaraan !== 'SEPEDA') {
+        formData.append('no_plat', noPlat);
+      }
+      if (tipeKendaraan === 'MOBIL_LISTRIK') {
+        formData.append('kapasitas_max_kwh', kapasitasMaxKwh);
+        formData.append('sisa_baterai_persen', sisaBateraiPersen || '0');
+      }
       formData.append('tipe_sewa', tipeSewa);
+      if (tipeSewa === 'HARIAN') {
+        formData.append('jumlah_hari', jumlahHari);
+      }
       formData.append('bukti_pelunasan', buktiFile);
 
       const res = await fetch('/api/transaksi', {
@@ -325,7 +278,12 @@ export default function PenyewaDashboardClient() {
       }
 
       setFeedback({ type: 'success', text: data.message });
+      setMerekTipe('');
+      setNoPlat('');
+      setKapasitasMaxKwh('');
+      setSisaBateraiPersen('0');
       setSelectedGarasiId('');
+      setJumlahHari('1');
       setBuktiFile(null);
       setPreview(null);
       await loadAllData();
@@ -337,8 +295,8 @@ export default function PenyewaDashboardClient() {
 
   if (loadingInit) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-400">
-        Memuat dashboard penyewa...
+      <div className="flex min-h-screen items-center justify-center bg-[#F5F5F7] text-sm text-[#86868B]">
+        Memuat ruang kerja penyewa...
       </div>
     );
   }
@@ -346,39 +304,43 @@ export default function PenyewaDashboardClient() {
   const isApproved = user?.status_ktp === 'APPROVED';
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      {/* Header */}
-      <header className="border-b border-zinc-800 bg-zinc-950/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-4">
+    <div className="min-h-screen bg-[#F5F5F7] text-[#1D1D1F]">
+      {/* Frosted Glass Navbar */}
+      <header className="sticky top-0 z-40 border-b border-black/[0.06] bg-white/75 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-3.5">
           <div className="flex items-center gap-3">
-            <Link href="/" className="flex items-center gap-2">
-              <span className="h-3 w-3 rounded-full bg-amber-500" />
-              <span className="text-lg font-bold">SewaGarasi</span>
+            <Link href="/" className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#1D1D1F] text-xs font-bold text-white shadow-sm">
+                SG
+              </div>
+              <span className="text-[17px] font-semibold tracking-tight text-[#1D1D1F]">
+                SewaGarasi
+              </span>
             </Link>
-            <span className="rounded bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
-              Dashboard Penyewa
+            <span className="rounded-full bg-[#F5F5F7] px-2.5 py-0.5 text-xs font-medium text-[#6E6E73]">
+              Penyewa
             </span>
           </div>
 
-          <div className="flex items-center gap-4">
-            <div className="text-right text-sm">
-              <p className="font-medium text-white">{user?.nama_lengkap}</p>
-              <p className="text-xs text-zinc-400">{user?.email}</p>
+          <div className="flex items-center gap-3.5">
+            <div className="text-right">
+              <p className="text-[13px] font-semibold text-[#1D1D1F]">{user?.nama_lengkap}</p>
+              <p className="text-[11px] text-[#86868B]">{user?.email}</p>
             </div>
             <span
-              className={`rounded-full px-3 py-1 text-xs font-semibold ${
+              className={`rounded-full px-3 py-1 text-xs font-medium ${
                 user?.status_ktp === 'APPROVED'
-                  ? 'bg-emerald-500/15 text-emerald-400'
+                  ? 'bg-[#34C759]/12 text-[#1E8E3E]'
                   : user?.status_ktp === 'REJECTED'
-                  ? 'bg-red-500/15 text-red-400'
-                  : 'bg-amber-500/15 text-amber-400'
+                  ? 'bg-[#FF3B30]/12 text-[#D93025]'
+                  : 'bg-[#FF9500]/12 text-[#B26B00]'
               }`}
             >
               KTP: {user?.status_ktp}
             </span>
             <button
               onClick={handleLogout}
-              className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-red-500/50 hover:text-red-400"
+              className="rounded-full border border-black/[0.08] bg-white px-3.5 py-1.5 text-xs font-medium text-[#1D1D1F] transition hover:bg-black/[0.04]"
             >
               Keluar
             </button>
@@ -387,44 +349,23 @@ export default function PenyewaDashboardClient() {
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-8">
-        {/* Banner Status KTP */}
-        {!isApproved && (
-          <div
-            className={`mb-6 rounded-xl border px-5 py-4 text-sm ${
-              user?.status_ktp === 'REJECTED'
-                ? 'border-red-500/30 bg-red-500/10 text-red-300'
-                : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-            }`}
-          >
-            {user?.status_ktp === 'REJECTED' ? (
-              <strong>Verifikasi KTP Ditolak.</strong>
-            ) : (
-              <strong>Menunggu Verifikasi KTP oleh Admin.</strong>
-            )}{' '}
-            Kamu sudah bisa mendaftarkan kendaraan di tab <em>Kendaraan Saya</em>, namun transaksi
-            sewa garasi baru bisa dilakukan setelah KTP berstatus <strong>APPROVED</strong>.
-          </div>
-        )}
-
-        {/* Alert Feedback */}
         {feedback && (
           <div
-            className={`mb-6 rounded-xl border px-5 py-3.5 text-sm ${
+            className={`mb-6 rounded-2xl px-5 py-3.5 text-[13px] font-medium ${
               feedback.type === 'error'
-                ? 'border-red-500/30 bg-red-500/10 text-red-400'
-                : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                ? 'bg-[#FF3B30]/10 text-[#D93025]'
+                : 'bg-[#34C759]/12 text-[#1E8E3E]'
             }`}
           >
             {feedback.text}
           </div>
         )}
 
-        {/* Tabs */}
-        <div className="mb-8 flex gap-2 border-b border-zinc-800 pb-3">
+        {/* Apple Segmented Control */}
+        <div className="mb-8 inline-flex rounded-full bg-black/[0.05] p-1">
           {(
             [
-              { key: 'sewa', label: 'Sewa Garasi' },
-              { key: 'kendaraan', label: `Kendaraan Saya (${kendaraanList.length})` },
+              { key: 'sewa', label: 'Sewa Baru' },
               { key: 'riwayat', label: `Riwayat Sewa (${transaksiList.length})` },
             ] as const
           ).map((tab) => (
@@ -434,10 +375,10 @@ export default function PenyewaDashboardClient() {
                 setActiveTab(tab.key);
                 setFeedback(null);
               }}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+              className={`rounded-full px-5 py-1.5 text-[13px] font-medium transition ${
                 activeTab === tab.key
-                  ? 'bg-amber-500 text-zinc-950'
-                  : 'bg-zinc-900 text-zinc-400 hover:text-white'
+                  ? 'bg-white text-[#1D1D1F] shadow-[0_1px_4px_rgba(0,0,0,0.08)]'
+                  : 'text-[#6E6E73] hover:text-[#1D1D1F]'
               }`}
             >
               {tab.label}
@@ -445,426 +386,422 @@ export default function PenyewaDashboardClient() {
           ))}
         </div>
 
-        {/* TAB 1: SEWA GARASI */}
+        {/* TAB 1: SEWA BARU */}
         {activeTab === 'sewa' && (
-          <div className="grid gap-8 lg:grid-cols-3">
-            <form
-              onSubmit={handleSubmitSewa}
-              className="space-y-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-6 lg:col-span-2"
-            >
-              <h2 className="text-lg font-semibold text-white">Form Penyewaan Garasi</h2>
-
-              {kendaraanList.length === 0 ? (
-                <div className="rounded-lg border border-zinc-700 bg-zinc-950 p-4 text-sm text-zinc-400">
-                  Kamu belum mendaftarkan kendaraan. Tambahkan kendaraan terlebih dahulu di tab{' '}
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('kendaraan')}
-                    className="font-semibold text-amber-400 underline"
-                  >
-                    Kendaraan Saya
-                  </button>
-                  .
-                </div>
-              ) : (
-                <>
-                  <div>
-                    <label className="mb-1.5 block text-sm text-zinc-300">1. Pilih Kendaraan</label>
-                    <select
-                      required
-                      value={selectedKendaraanId}
-                      onChange={(e) => setSelectedKendaraanId(e.target.value)}
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none focus:border-amber-500"
-                    >
-                      <option value="">-- Pilih Kendaraan --</option>
-                      {kendaraanList.map((k) => (
-                        <option key={k.id} value={k.id}>
-                          [{k.tipe.replace('_', ' ')}] {k.merek_tipe}{' '}
-                          {k.no_plat ? `(${k.no_plat})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="mb-1.5 block text-sm text-zinc-300">
-                      2. Pilih Unit Garasi Tersedia (Sesuai Tipe Kendaraan)
-                    </label>
-                    <select
-                      required
-                      disabled={!selectedKendaraanId}
-                      value={selectedGarasiId}
-                      onChange={(e) => setSelectedGarasiId(e.target.value)}
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none focus:border-amber-500 disabled:opacity-50"
-                    >
-                      <option value="">
-                        {!selectedKendaraanId
-                          ? '-- Pilih kendaraan dahulu --'
-                          : compatibleGarasi.length === 0
-                          ? '-- Tidak ada garasi tersedia untuk tipe ini --'
-                          : '-- Pilih Unit Garasi --'}
-                      </option>
-                      {compatibleGarasi.map((g) => (
-                        <option key={g.id} value={g.id}>
-                          {g.kode_garasi} — Rp {g.harga_harian.toLocaleString('id-ID')}/hari | Rp{' '}
-                          {g.harga_bulanan.toLocaleString('id-ID')}/bln
-                          {g.harga_listrik_per_kwh
-                            ? ` (+Rp ${g.harga_listrik_per_kwh.toLocaleString('id-ID')}/kWh)`
-                            : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="mb-1.5 block text-sm text-zinc-300">3. Paket Sewa</label>
-                    <div className="grid grid-cols-2 gap-3">
-                      {(['HARIAN', 'BULANAN'] as const).map((t) => (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => setTipeSewa(t)}
-                          className={`rounded-lg border py-2.5 text-sm font-semibold transition ${
-                            tipeSewa === t
-                              ? 'border-amber-500 bg-amber-500/15 text-amber-400'
-                              : 'border-zinc-700 bg-zinc-950 text-zinc-400 hover:border-zinc-600'
-                          }`}
-                        >
-                          {t === 'HARIAN' ? 'Sewa Harian' : 'Paket Bulanan (25×)'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-1.5 block text-sm text-zinc-300">Tanggal Mulai</label>
-                      <input
-                        type="date"
-                        required
-                        value={tglMulai}
-                        onChange={(e) => setTglMulai(e.target.value)}
-                        className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none focus:border-amber-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-1.5 block text-sm text-zinc-300">
-                        Tanggal Selesai {tipeSewa === 'BULANAN' && '(Otomatis 1 Bulan)'}
-                      </label>
-                      <input
-                        type="date"
-                        required
-                        readOnly={tipeSewa === 'BULANAN'}
-                        value={tglSelesai}
-                        onChange={(e) => setTglSelesai(e.target.value)}
-                        className={`w-full rounded-lg border border-zinc-700 px-3.5 py-2.5 text-sm text-white outline-none focus:border-amber-500 ${
-                          tipeSewa === 'BULANAN' ? 'bg-zinc-800/60 text-zinc-400' : 'bg-zinc-950'
-                        }`}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="mb-1.5 block text-sm text-zinc-300">
-                      4. Upload Bukti Pelunasan (JPG/PNG/WEBP, maks 5MB)
-                    </label>
-                    <input
-                      type="file"
-                      required
-                      accept="image/jpeg,image/png,image/webp"
-                      onChange={(e) => setBuktiFile(e.target.files?.[0] ?? null)}
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-300 file:mr-4 file:rounded-md file:border-0 file:bg-amber-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-zinc-950"
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={!isApproved || !preview || submittingSewa}
-                    className="w-full rounded-lg bg-amber-500 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {submittingSewa ? 'Memproses Transaksi...' : 'Konfirmasi & Sewa Garasi'}
-                  </button>
-                </>
-              )}
-            </form>
-
-            {/* Panel Rincian Biaya Real-Time */}
-            <div className="h-fit rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-              <h3 className="text-base font-semibold text-white">Rincian Estimasi Biaya</h3>
-
-              {previewError && (
-                <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
-                  {previewError}
-                </div>
-              )}
-
-              {!preview && !previewError && (
-                <p className="mt-4 text-sm text-zinc-400">
-                  Pilih kendaraan, garasi, dan tanggal untuk melihat perhitungan biaya otomatis.
-                </p>
-              )}
-
-              {preview && (
-                <div className="mt-5 space-y-3 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-zinc-400">Tipe Sewa</span>
-                    <span className="font-semibold text-amber-400">{preview.rincian.tipeSewa}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-zinc-400">Periode</span>
-                    <span className="text-zinc-200">
-                      {preview.tgl_mulai} &rarr; {preview.tgl_selesai}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-zinc-400">Durasi</span>
-                    <span className="text-zinc-200">{preview.rincian.jumlahHari} hari</span>
-                  </div>
-                  <div className="flex justify-between text-xs text-zinc-500">
-                    <span>Batas Harian Bulan Ini</span>
-                    <span>Maks {preview.batas_maksimal_harian} hari</span>
-                  </div>
-
-                  <div className="border-t border-zinc-800 pt-3 space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-zinc-400">Biaya Sewa Garasi</span>
-                      <span>Rp {preview.rincian.biayaSewa.toLocaleString('id-ID')}</span>
-                    </div>
-                    {preview.rincian.biayaListrik > 0 && (
-                      <div className="flex justify-between text-sky-400">
-                        <span>Isi Daya EV ({preview.kebutuhan_kwh} kWh)</span>
-                        <span>Rp {preview.rincian.biayaListrik.toLocaleString('id-ID')}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex justify-between border-t border-zinc-800 pt-3 text-base font-bold">
-                    <span>Total Pelunasan</span>
-                    <span className="text-amber-400">
-                      Rp {preview.rincian.totalBiaya.toLocaleString('id-ID')}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* TAB 2: KENDARAAN SAYA */}
-        {activeTab === 'kendaraan' && (
-          <div className="grid gap-8 lg:grid-cols-3">
-            <form
-              onSubmit={handleTambahKendaraan}
-              className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900 p-6"
-            >
-              <h2 className="text-lg font-semibold text-white">Tambah Kendaraan</h2>
-
-              <div>
-                <label className="mb-1.5 block text-sm text-zinc-300">Tipe Kendaraan</label>
-                <select
-                  value={kForm.tipe}
-                  onChange={(e) => setKForm({ ...kForm, tipe: e.target.value as TipeKendaraan })}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none focus:border-amber-500"
+          <>
+            {!isApproved ? (
+              <div className="rounded-3xl border border-black/[0.06] bg-white p-10 text-center shadow-[0_2px_12px_rgba(0,0,0,0.03)]">
+                <div
+                  className={`mx-auto mb-3 inline-flex rounded-full px-3.5 py-1 text-xs font-semibold ${
+                    user?.status_ktp === 'REJECTED'
+                      ? 'bg-[#FF3B30]/12 text-[#D93025]'
+                      : 'bg-[#FF9500]/12 text-[#B26B00]'
+                  }`}
                 >
-                  <option value="SEPEDA">Sepeda</option>
-                  <option value="SEPEDA_MOTOR">Sepeda Motor</option>
-                  <option value="MOBIL">Mobil</option>
-                  <option value="MOBIL_LISTRIK">Mobil Listrik (EV)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-sm text-zinc-300">Merek &amp; Tipe</label>
-                <input
-                  type="text"
-                  required
-                  value={kForm.merek_tipe}
-                  onChange={(e) => setKForm({ ...kForm, merek_tipe: e.target.value })}
-                  placeholder="Contoh: Hyundai Ioniq 5 / Honda Vario"
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none focus:border-amber-500"
-                />
-              </div>
-
-              {kForm.tipe !== 'SEPEDA' && (
-                <div>
-                  <label className="mb-1.5 block text-sm text-zinc-300">Nomor Plat</label>
-                  <input
-                    type="text"
-                    required
-                    value={kForm.no_plat}
-                    onChange={(e) => setKForm({ ...kForm, no_plat: e.target.value.toUpperCase() })}
-                    placeholder="L 1234 AB"
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none focus:border-amber-500"
-                  />
+                  Status KTP: {user?.status_ktp}
                 </div>
-              )}
-
-              {kForm.tipe === 'MOBIL_LISTRIK' && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="mb-1.5 block text-xs text-zinc-300">
-                      Kapasitas Max (kWh)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="1"
-                      required
-                      value={kForm.kapasitas_max_kwh}
-                      onChange={(e) => setKForm({ ...kForm, kapasitas_max_kwh: e.target.value })}
-                      placeholder="72.6"
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-xs text-zinc-300">
-                      Sisa Baterai (kWh)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      required
-                      value={kForm.baterai_terakhir_kwh}
-                      onChange={(e) =>
-                        setKForm({ ...kForm, baterai_terakhir_kwh: e.target.value })
-                      }
-                      placeholder="20"
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
-                    />
-                  </div>
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={submittingKendaraan}
-                className="w-full rounded-lg bg-amber-500 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-400 disabled:opacity-50"
-              >
-                {submittingKendaraan ? 'Menyimpan...' : 'Simpan Kendaraan'}
-              </button>
-            </form>
-
-            <div className="space-y-4 lg:col-span-2">
-              <h2 className="text-lg font-semibold text-white">Daftar Kendaraan Terdaftar</h2>
-              {kendaraanList.length === 0 ? (
-                <p className="rounded-xl border border-zinc-800 bg-zinc-900 p-6 text-sm text-zinc-400">
-                  Belum ada kendaraan yang didaftarkan.
+                <h2 className="text-xl font-semibold tracking-tight text-[#1D1D1F]">
+                  {user?.status_ktp === 'REJECTED'
+                    ? 'Verifikasi KTP Ditolak'
+                    : 'Menunggu Verifikasi Admin'}
+                </h2>
+                <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-[#6E6E73]">
+                  {user?.status_ktp === 'REJECTED'
+                    ? 'Data KTP Anda ditolak oleh Admin sehingga akses penyewaan garasi belum tersedia.'
+                    : 'Admin sedang meninjau identitas KTP Anda. Formulir penyewaan garasi akan terbuka otomatis setelah disetujui.'}
                 </p>
-              ) : (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  {kendaraanList.map((k) => (
-                    <div
-                      key={k.id}
-                      className="flex flex-col justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-5"
-                    >
+              </div>
+            ) : (
+              <div className="grid gap-8 lg:grid-cols-3">
+                <form
+                  onSubmit={handleSubmitSewa}
+                  className="space-y-7 rounded-3xl border border-black/[0.06] bg-white p-7 shadow-[0_2px_12px_rgba(0,0,0,0.03)] lg:col-span-2"
+                >
+                  <div>
+                    <h2 className="text-[17px] font-semibold tracking-tight text-[#1D1D1F]">
+                      1. Detail Kendaraan
+                    </h2>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
                       <div>
-                        <span className="rounded bg-zinc-800 px-2 py-0.5 text-xs font-medium text-amber-400">
-                          {k.tipe.replace('_', ' ')}
-                        </span>
-                        <h3 className="mt-2 text-base font-bold text-white">{k.merek_tipe}</h3>
-                        {k.no_plat && (
-                          <p className="mt-1 text-sm font-mono text-zinc-400">{k.no_plat}</p>
-                        )}
-                        {k.tipe === 'MOBIL_LISTRIK' && (
-                          <p className="mt-2 text-xs text-sky-400">
-                            Baterai: {k.baterai_terakhir_kwh} / {k.kapasitas_max_kwh} kWh
-                          </p>
-                        )}
+                        <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
+                          Tipe Kendaraan
+                        </label>
+                        <select
+                          value={tipeKendaraan}
+                          onChange={(e) => setTipeKendaraan(e.target.value as TipeKendaraan)}
+                          className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] outline-none transition focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/15"
+                        >
+                          <option value="SEPEDA">Sepeda</option>
+                          <option value="SEPEDA_MOTOR">Sepeda Motor</option>
+                          <option value="MOBIL">Mobil</option>
+                          <option value="MOBIL_LISTRIK">Mobil Listrik (EV)</option>
+                        </select>
                       </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
+                          Merek &amp; Tipe
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={merekTipe}
+                          onChange={(e) => setMerekTipe(e.target.value)}
+                          placeholder="Contoh: Hyundai Ioniq 5 / Honda Vario"
+                          className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] placeholder-[#86868B] outline-none transition focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/15"
+                        />
+                      </div>
+
+                      {tipeKendaraan !== 'SEPEDA' && (
+                        <div>
+                          <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
+                            Nomor Plat
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={noPlat}
+                            onChange={(e) => setNoPlat(e.target.value.toUpperCase())}
+                            placeholder="L 1234 AB"
+                            className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] placeholder-[#86868B] outline-none transition focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/15"
+                          />
+                        </div>
+                      )}
+
+                      {tipeKendaraan === 'MOBIL_LISTRIK' && (
+                        <>
+                          <div>
+                            <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
+                              Kapasitas Listrik (kWh)
+                            </label>
+                            <input
+                              type="number"
+                              step="0.1"
+                              min="1"
+                              required
+                              value={kapasitasMaxKwh}
+                              onChange={(e) => setKapasitasMaxKwh(e.target.value)}
+                              placeholder="Contoh: 72.6"
+                              className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] placeholder-[#86868B] outline-none transition focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/15"
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
+                              Sisa Baterai Saat Ini (%)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              max="100"
+                              value={sisaBateraiPersen}
+                              onChange={(e) => setSisaBateraiPersen(e.target.value)}
+                              placeholder="0"
+                              className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] placeholder-[#86868B] outline-none transition focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/15"
+                            />
+                            <p className="mt-1 text-[11px] text-[#86868B]">
+                              Default 0% menghitung pengisian penuh 100% kapasitas.
+                            </p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="border-t border-black/[0.06] pt-6">
+                    <h2 className="text-[17px] font-semibold tracking-tight text-[#1D1D1F]">
+                      2. Unit Garasi Tersedia Hari Ini
+                    </h2>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
+                          Tipe Garasi
+                        </label>
+                        <select
+                          value={selectedTipeGarasi}
+                          onChange={(e) => {
+                            setSelectedTipeGarasi(e.target.value as TipeGarasi);
+                            setSelectedGarasiId('');
+                          }}
+                          className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] outline-none transition focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/15"
+                        >
+                          {allowedGarasiTypes.map((t) => (
+                            <option key={t} value={t}>
+                              {t === 'SEPEDA'
+                                ? 'Garasi Sepeda / Motor'
+                                : t === 'MOBIL'
+                                ? 'Garasi Mobil'
+                                : 'Garasi Mobil Listrik (Wajib Isi Penuh)'}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
+                          Unit Garasi Tersedia
+                        </label>
+                        <select
+                          required
+                          value={selectedGarasiId}
+                          onChange={(e) => setSelectedGarasiId(e.target.value)}
+                          className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] outline-none transition focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/15"
+                        >
+                          <option value="">
+                            {availableGarasiByType.length === 0
+                              ? '-- Tidak ada unit tersedia --'
+                              : '-- Pilih Unit Garasi --'}
+                          </option>
+                          {availableGarasiByType.map((g) => (
+                            <option key={g.id} value={g.id}>
+                              {g.kode_garasi} — Rp {g.harga_harian.toLocaleString('id-ID')}/hari
+                              {g.harga_listrik_per_kwh
+                                ? ` (+Rp ${g.harga_listrik_per_kwh.toLocaleString('id-ID')}/kWh)`
+                                : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-black/[0.06] pt-6">
+                    <h2 className="text-[17px] font-semibold tracking-tight text-[#1D1D1F]">
+                      3. Durasi &amp; Pelunasan
+                    </h2>
+                    <div className="mt-4 space-y-4">
+                      <div className="grid grid-cols-2 rounded-full bg-black/[0.05] p-1">
+                        {(['HARIAN', 'BULANAN'] as const).map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => setTipeSewa(t)}
+                            className={`rounded-full py-2 text-[13px] font-medium transition ${
+                              tipeSewa === t
+                                ? 'bg-white text-[#1D1D1F] shadow-[0_1px_4px_rgba(0,0,0,0.08)]'
+                                : 'text-[#6E6E73] hover:text-[#1D1D1F]'
+                            }`}
+                          >
+                            {t === 'HARIAN' ? 'Sewa Harian' : 'Sewa Bulanan (25×)'}
+                          </button>
+                        ))}
+                      </div>
+
+                      {tipeSewa === 'HARIAN' && (
+                        <div>
+                          <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
+                            Jumlah Hari (maksimal {maxDailyThisMonth} hari bulan ini)
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            max={maxDailyThisMonth}
+                            required
+                            value={jumlahHari}
+                            onChange={(e) => setJumlahHari(e.target.value)}
+                            className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] outline-none transition focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/15"
+                          />
+                        </div>
+                      )}
+
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
+                            Tanggal Mulai (Hari Ini)
+                          </label>
+                          <input
+                            type="date"
+                            readOnly
+                            value={todayStr}
+                            className="w-full rounded-xl border border-black/[0.06] bg-[#F5F5F7] px-3.5 py-2.5 text-sm text-[#6E6E73] outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
+                            Tanggal Selesai (Otomatis)
+                          </label>
+                          <input
+                            type="date"
+                            readOnly
+                            value={preview?.tgl_selesai ?? ''}
+                            className="w-full rounded-xl border border-black/[0.06] bg-[#F5F5F7] px-3.5 py-2.5 text-sm text-[#6E6E73] outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
+                          Bukti Pelunasan Biaya (JPG/PNG/WEBP, maks 5MB)
+                        </label>
+                        <input
+                          type="file"
+                          required
+                          accept="image/jpeg,image/png,image/webp"
+                          onChange={(e) => setBuktiFile(e.target.files?.[0] ?? null)}
+                          className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3 py-2 text-sm text-[#6E6E73] file:mr-4 file:rounded-full file:border-0 file:bg-[#0071E3]/10 file:px-4 file:py-1.5 file:text-xs file:font-medium file:text-[#0071E3]"
+                        />
+                      </div>
+
                       <button
-                        onClick={() => handleHapusKendaraan(k.id)}
-                        className="mt-4 w-fit text-xs text-red-400 hover:underline"
+                        type="submit"
+                        disabled={!preview || submittingSewa}
+                        className="w-full rounded-full bg-[#0071E3] py-3 text-sm font-medium text-white shadow-sm transition hover:bg-[#0077ED] disabled:cursor-not-allowed disabled:opacity-40"
                       >
-                        Hapus Kendaraan
+                        {submittingSewa ? 'Menyimpan Transaksi...' : 'Konfirmasi & Sewa Garasi'}
                       </button>
                     </div>
-                  ))}
+                  </div>
+                </form>
+
+                {/* Panel Ringkasan Biaya */}
+                <div className="h-fit rounded-3xl border border-black/[0.06] bg-white p-7 shadow-[0_2px_12px_rgba(0,0,0,0.03)]">
+                  <h3 className="text-[17px] font-semibold tracking-tight text-[#1D1D1F]">
+                    Ringkasan Biaya
+                  </h3>
+
+                  {previewError && (
+                    <div className="mt-4 rounded-2xl bg-[#FF3B30]/10 p-3.5 text-xs font-medium text-[#D93025]">
+                      {previewError}
+                    </div>
+                  )}
+
+                  {!preview && !previewError && (
+                    <p className="mt-4 text-sm leading-relaxed text-[#86868B]">
+                      Lengkapi detail kendaraan dan pilih unit garasi untuk melihat total pelunasan
+                      secara otomatis.
+                    </p>
+                  )}
+
+                  {preview && (
+                    <div className="mt-5 space-y-3 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-[#6E6E73]">Paket</span>
+                        <span className="font-semibold text-[#0071E3]">
+                          {preview.rincian.tipeSewa}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-[#6E6E73]">Periode</span>
+                        <span className="font-medium text-[#1D1D1F]">
+                          {preview.tgl_mulai} &rarr; {preview.tgl_selesai}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-[#6E6E73]">Durasi</span>
+                        <span className="font-medium text-[#1D1D1F]">
+                          {preview.rincian.jumlahHari} hari
+                        </span>
+                      </div>
+
+                      <div className="space-y-2.5 border-t border-black/[0.06] pt-3.5">
+                        <div className="flex justify-between">
+                          <span className="text-[#6E6E73]">Sewa Garasi</span>
+                          <span className="font-medium text-[#1D1D1F]">
+                            Rp {preview.rincian.biayaSewa.toLocaleString('id-ID')}
+                          </span>
+                        </div>
+                        {preview.rincian.biayaListrik > 0 && (
+                          <div className="flex justify-between text-[#0071E3]">
+                            <span>Isi Listrik ({preview.kebutuhan_kwh} kWh)</span>
+                            <span className="font-medium">
+                              Rp {preview.rincian.biayaListrik.toLocaleString('id-ID')}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex items-baseline justify-between border-t border-black/[0.06] pt-4">
+                        <span className="text-sm font-semibold text-[#1D1D1F]">Total Biaya</span>
+                        <span className="text-xl font-semibold tracking-tight text-[#1D1D1F]">
+                          Rp {preview.rincian.totalBiaya.toLocaleString('id-ID')}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          </div>
+              </div>
+            )}
+          </>
         )}
 
-        {/* TAB 3: RIWAYAT SEWA */}
+        {/* TAB 2: RIWAYAT SEWA */}
         {activeTab === 'riwayat' && (
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold text-white">Riwayat &amp; Sewa Aktif</h2>
             {transaksiList.length === 0 ? (
-              <p className="rounded-xl border border-zinc-800 bg-zinc-900 p-6 text-sm text-zinc-400">
+              <div className="rounded-3xl border border-black/[0.06] bg-white p-10 text-center text-sm text-[#86868B] shadow-[0_2px_12px_rgba(0,0,0,0.03)]">
                 Belum ada riwayat transaksi sewa garasi.
-              </p>
+              </div>
             ) : (
               transaksiList.map((t) => (
                 <div
                   key={t.id}
-                  className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5"
+                  className="rounded-3xl border border-black/[0.06] bg-white p-6 shadow-[0_2px_12px_rgba(0,0,0,0.03)]"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg font-bold text-white">
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        <span className="text-xl font-semibold tracking-tight text-[#1D1D1F]">
                           Garasi {t.garasi?.kode_garasi}
                         </span>
                         <span
-                          className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                          className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
                             t.status === 'ACTIVE'
-                              ? 'bg-emerald-500/15 text-emerald-400'
-                              : 'bg-zinc-700 text-zinc-300'
+                              ? 'bg-[#34C759]/12 text-[#1E8E3E]'
+                              : 'bg-black/[0.06] text-[#6E6E73]'
                           }`}
                         >
                           {t.status}
                         </span>
-                        <span className="rounded bg-zinc-800 px-2 py-0.5 text-xs text-amber-400">
+                        <span className="rounded-full bg-[#0071E3]/10 px-2.5 py-0.5 text-xs font-medium text-[#0071E3]">
                           {t.tipe_sewa} ({t.jumlah_hari} hari)
                         </span>
                       </div>
-                      <p className="mt-1 text-sm text-zinc-400">
-                        Kendaraan: {t.kendaraan?.merek_tipe}{' '}
+                      <p className="mt-1.5 text-sm text-[#6E6E73]">
+                        Kendaraan: <span className="text-[#1D1D1F]">{t.kendaraan?.merek_tipe}</span>{' '}
                         {t.kendaraan?.no_plat ? `(${t.kendaraan.no_plat})` : ''}
                       </p>
-                      <p className="mt-1 text-sm text-zinc-300">
-                        Periode: <strong>{t.tgl_mulai}</strong> s/d <strong>{t.tgl_selesai}</strong>
+                      <p className="mt-1 text-sm text-[#6E6E73]">
+                        Periode: <strong className="font-medium text-[#1D1D1F]">{t.tgl_mulai}</strong>{' '}
+                        s/d <strong className="font-medium text-[#1D1D1F]">{t.tgl_selesai}</strong>
                       </p>
                     </div>
 
                     <div className="text-right text-sm">
-                      <p className="text-zinc-400">
+                      <p className="text-[#6E6E73]">
                         Sewa: Rp {Number(t.biaya_sewa).toLocaleString('id-ID')}
                       </p>
                       {Number(t.biaya_listrik) > 0 && (
-                        <p className="text-sky-400">
+                        <p className="text-[#0071E3]">
                           Listrik EV: Rp {Number(t.biaya_listrik).toLocaleString('id-ID')}
                         </p>
                       )}
-                      <p className="mt-1 text-base font-bold text-amber-400">
-                        Total: Rp {Number(t.total_biaya).toLocaleString('id-ID')}
+                      <p className="mt-1 text-lg font-semibold text-[#1D1D1F]">
+                        Rp {Number(t.total_biaya).toLocaleString('id-ID')}
                       </p>
                       <a
                         href={t.bukti_pelunasan}
                         target="_blank"
                         rel="noreferrer"
-                        className="mt-1 inline-block text-xs text-zinc-400 underline hover:text-white"
+                        className="mt-1 inline-block text-xs font-medium text-[#0071E3] hover:underline"
                       >
-                        Lihat Bukti Bayar
+                        Lihat Bukti Bayar &rarr;
                       </a>
                     </div>
                   </div>
 
                   {t.perpanjangan && t.perpanjangan.length > 0 && (
-                    <div className="mt-4 border-t border-zinc-800 pt-3">
-                      <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                    <div className="mt-4 border-t border-black/[0.06] pt-3.5">
+                      <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[#86868B]">
                         Riwayat Perpanjangan
                       </p>
-                      <div className="space-y-1.5 text-xs text-zinc-300">
+                      <div className="space-y-1.5 text-xs text-[#6E6E73]">
                         {t.perpanjangan.map((p) => (
                           <div key={p.id} className="flex flex-wrap justify-between gap-2">
                             <span>
                               {p.tgl_selesai_lama} &rarr; {p.tgl_selesai_baru} (+{p.tambahan_hari}{' '}
                               hari)
                             </span>
-                            <span className="text-amber-400">
+                            <span className="font-medium text-[#0071E3]">
                               +Rp {Number(p.sisa_biaya).toLocaleString('id-ID')}
                             </span>
                           </div>

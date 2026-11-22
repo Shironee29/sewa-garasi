@@ -48,33 +48,38 @@ export default function RegisterPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-4 py-10 text-zinc-100">
-      <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-8 shadow-xl">
-        <div className="mb-6">
-          <Link href="/" className="text-xs text-amber-400 hover:underline">
-            &larr; Kembali ke Katalog
+    <main className="flex min-h-screen items-center justify-center bg-[#F5F5F7] px-4 py-12 text-[#1D1D1F]">
+      <div className="w-full max-w-[440px] rounded-3xl border border-black/[0.06] bg-white p-8 shadow-[0_8px_30px_rgba(0,0,0,0.04)]">
+        <div className="mb-7 text-center">
+          <Link
+            href="/"
+            className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-[#1D1D1F] text-sm font-bold text-white shadow-sm"
+          >
+            SG
           </Link>
-          <h1 className="mt-3 text-2xl font-bold text-white">Daftar Penyewa</h1>
-          <p className="mt-1 text-sm text-zinc-400">
-            Lengkapi identitas KTP untuk verifikasi oleh Admin sebelum menyewa.
+          <h1 className="text-2xl font-semibold tracking-tight text-[#1D1D1F]">
+            Buat Akun Penyewa
+          </h1>
+          <p className="mt-1.5 text-sm text-[#6E6E73]">
+            Lengkapi identitas KTP untuk verifikasi Admin.
           </p>
         </div>
 
         {error && (
-          <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+          <div className="mb-5 rounded-2xl bg-[#FF3B30]/10 px-4 py-3 text-[13px] font-medium text-[#D93025]">
             {error}
           </div>
         )}
 
         {success && (
-          <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
-            {success} Mengalihkan ke halaman login...
+          <div className="mb-5 rounded-2xl bg-[#34C759]/12 px-4 py-3 text-[13px] font-medium text-[#1E8E3E]">
+            {success} Mengalihkan ke halaman masuk...
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-zinc-300">
+            <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
               Nama Lengkap (sesuai KTP)
             </label>
             <input
@@ -83,12 +88,12 @@ export default function RegisterPage() {
               value={form.nama_lengkap}
               onChange={(e) => setForm({ ...form, nama_lengkap: e.target.value })}
               placeholder="Budi Santoso"
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none focus:border-amber-500"
+              className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] placeholder-[#86868B] outline-none transition focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/15"
             />
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-zinc-300">
+            <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
               NIK (16 Digit)
             </label>
             <input
@@ -101,12 +106,12 @@ export default function RegisterPage() {
                 setForm({ ...form, nik: e.target.value.replace(/\D/g, '') })
               }
               placeholder="3578012345678901"
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none focus:border-amber-500"
+              className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] placeholder-[#86868B] outline-none transition focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/15"
             />
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-zinc-300">
+            <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
               Nomor Telepon / WhatsApp
             </label>
             <input
@@ -115,12 +120,12 @@ export default function RegisterPage() {
               value={form.no_telp}
               onChange={(e) => setForm({ ...form, no_telp: e.target.value })}
               placeholder="081234567890"
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none focus:border-amber-500"
+              className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] placeholder-[#86868B] outline-none transition focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/15"
             />
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-zinc-300">
+            <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
               Email
             </label>
             <input
@@ -129,12 +134,12 @@ export default function RegisterPage() {
               value={form.email}
               onChange={(e) => setForm({ ...form, email: e.target.value })}
               placeholder="budi@email.com"
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none focus:border-amber-500"
+              className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] placeholder-[#86868B] outline-none transition focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/15"
             />
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-zinc-300">
+            <label className="mb-1.5 block text-[13px] font-medium text-[#1D1D1F]">
               Password (minimal 6 karakter)
             </label>
             <input
@@ -144,25 +149,25 @@ export default function RegisterPage() {
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
               placeholder="••••••••"
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none focus:border-amber-500"
+              className="w-full rounded-xl border border-[#D2D2D7] bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] placeholder-[#86868B] outline-none transition focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/15"
             />
           </div>
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-lg bg-amber-500 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-400 disabled:opacity-50"
+            className="mt-2 w-full rounded-full bg-[#0071E3] py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-[#0077ED] disabled:opacity-50"
           >
-            {loading ? 'Mendaftar...' : 'Daftar Sekarang'}
+            {loading ? 'Mendaftarkan...' : 'Daftar Sekarang'}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-zinc-400">
+        <div className="mt-6 border-t border-black/[0.06] pt-5 text-center text-[13px] text-[#6E6E73]">
           Sudah punya akun?{' '}
-          <Link href="/login" className="font-medium text-amber-400 hover:underline">
+          <Link href="/login" className="font-medium text-[#0071E3] hover:underline">
             Masuk di sini
           </Link>
-        </p>
+        </div>
       </div>
     </main>
   );

@@ -35,6 +35,12 @@ export async function PATCH(
     if (fetchError || !row) {
       return NextResponse.json({ error: 'Penyewa tidak ditemukan.' }, { status: 404 });
     }
+    if (row.status_ktp !== 'PENDING') {
+      return NextResponse.json(
+          { error: `Status KTP penyewa ini sudah final (${row.status_ktp}) dan tidak dapat diubah lagi.` },
+          { status: 400 }
+      );
+    }
 
     // Terapkan logika OOP dari Class Diagram
     const adminDomain = new Admin({

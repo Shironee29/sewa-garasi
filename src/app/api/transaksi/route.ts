@@ -5,11 +5,11 @@ import { uploadBuktiBayar } from '@/lib/storage';
 import { Garasi } from '@/domain/Garasi';
 import { Kendaraan } from '@/domain/Kendaraan';
 import { GaragePricingService } from '@/services/GaragePricingService';
-import { TipeSewa } from '@/types/domain';
+import { TipeKendaraan, TipeSewa } from '@/types/domain';
 
-function parseDateOnly(dateStr: string): Date {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Date(y, m - 1, d);
+function getTodayDateOnly(): Date {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
 function formatDateOnly(date: Date): string {
@@ -17,6 +17,15 @@ function formatDateOnly(date: Date): string {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+function normalizePlatNomor(input: string): string {
+  const compact = input.replace(/\s+/g, '').toUpperCase();
+  const match = compact.match(/^([A-Z]{1,2})(\d{1,4})([A-Z]{0,3})$/);
+  if (match) {
+    return [match[1], match[2], match[3]].filter(Boolean).join(' ');
+  }
+  return compact;
 }
 
 export async function GET() {
@@ -61,7 +70,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // 1. Pastikan status KTP penyewa terbaru di DB sudah APPROVED
+    // 1. Pastikan status KTP penyewa sudah APPROVED
     const { data: userRow } = await supabaseAdmin
       .from('users')
       .select('status_ktp')
@@ -75,41 +84,82 @@ export async function POST(request: Request) {
       );
     }
 
-    // 2. Baca multipart/form-data (fields + file bukti bayar)
+    // 2. Baca formData (detail kendaraan inline + pilihan garasi + durasi + bukti bayar)
     const formData = await request.formData();
     const garasiId = Number(formData.get('garasi_id'));
-    const kendaraanId = Number(formData.get('kendaraan_id'));
-    const tglMulaiStr = String(formData.get('tgl_mulai') ?? '');
-    const tglSelesaiStr = String(formData.get('tgl_selesai') ?? '');
-    const tipeSewaInput = formData.get('tipe_sewa') ? (String(formData.get('tipe_sewa')) as TipeSewa) : undefined;
+    const tipeKendaraan = String(formData.get('tipe_kendaraan') ?? '') as TipeKendaraan;
+    const merekTipe = String(formData.get('merek_tipe') ?? '').trim();
+    const noPlatRaw = String(formData.get('no_plat') ?? '').trim();
+    const kapasitasMaxKwhRaw = formData.get('kapasitas_max_kwh');
+    const sisaBateraiPersenRaw = formData.get('sisa_baterai_persen');
+    const tipeSewa = String(formData.get('tipe_sewa') ?? '') as TipeSewa;
+    const jumlahHariRaw = formData.get('jumlah_hari');
     const buktiFile = formData.get('bukti_pelunasan') as File | null;
 
-    if (!garasiId || !kendaraanId || !tglMulaiStr || !buktiFile || buktiFile.size === 0) {
+    if (!garasiId || !tipeKendaraan || !merekTipe || !tipeSewa || !buktiFile || buktiFile.size === 0) {
       return NextResponse.json(
-        { error: 'Garasi, kendaraan, tanggal mulai, dan foto bukti pelunasan wajib diisi.' },
+        { error: 'Detail kendaraan, unit garasi, tipe sewa, dan bukti pelunasan wajib diisi.' },
         { status: 400 }
       );
     }
 
-    // 3. Ambil data garasi & kendaraan dari Supabase
-    const [{ data: garasiRow }, { data: kendaraanRow }] = await Promise.all([
-      supabaseAdmin.from('garasi').select('*').eq('id', garasiId).single(),
-      supabaseAdmin
-        .from('kendaraan')
-        .select('*')
-        .eq('id', kendaraanId)
-        .eq('penyewa_id', session.userId)
-        .single(),
-    ]);
+    // 3. Validasi & normalisasi plat nomor
+    let formattedPlat: string | null = null;
+    if (tipeKendaraan !== 'SEPEDA') {
+      if (!noPlatRaw) {
+        return NextResponse.json(
+          { error: 'Nomor plat wajib diisi untuk kendaraan bermotor.' },
+          { status: 400 }
+        );
+      }
+      formattedPlat = normalizePlatNomor(noPlatRaw);
+
+      // Pastikan kendaraan dengan plat ini tidak sedang aktif menyewa garasi lain
+      const compactPlat = formattedPlat.replace(/\s+/g, '');
+      const { data: activeTrx } = await supabaseAdmin
+        .from('transaksi_sewa')
+        .select('id, kendaraan:kendaraan!transaksi_sewa_kendaraan_id_fkey(no_plat)')
+        .eq('status', 'ACTIVE');
+
+      const isCurrentlyParked = (activeTrx ?? []).some((row) => {
+        const k = Array.isArray(row.kendaraan) ? row.kendaraan[0] : row.kendaraan;
+        return k?.no_plat?.replace(/\s+/g, '').toUpperCase() === compactPlat;
+      });
+
+      if (isCurrentlyParked) {
+        return NextResponse.json(
+          { error: `Kendaraan dengan plat ${formattedPlat} sedang aktif terparkir di garasi lain.` },
+          { status: 409 }
+        );
+      }
+    }
+
+    // 4. Validasi kapasitas listrik EV
+    let maxKwh: number | null = null;
+    let bateraiTerakhirKwh: number | null = null;
+    if (tipeKendaraan === 'MOBIL_LISTRIK') {
+      maxKwh = Number(kapasitasMaxKwhRaw);
+      const persen = Number(sisaBateraiPersenRaw ?? 0);
+      if (!maxKwh || maxKwh <= 0 || isNaN(persen) || persen < 0 || persen > 100) {
+        return NextResponse.json(
+          { error: 'Kapasitas listrik (kWh) dan persentase baterai (0-100%) harus valid.' },
+          { status: 400 }
+        );
+      }
+      bateraiTerakhirKwh = Number(((maxKwh * persen) / 100).toFixed(2));
+    }
+
+    // 5. Ambil & cek ketersediaan garasi
+    const { data: garasiRow } = await supabaseAdmin
+      .from('garasi')
+      .select('*')
+      .eq('id', garasiId)
+      .single();
 
     if (!garasiRow) {
       return NextResponse.json({ error: 'Unit garasi tidak ditemukan.' }, { status: 404 });
     }
-    if (!kendaraanRow) {
-      return NextResponse.json({ error: 'Kendaraan tidak ditemukan atau bukan milik Anda.' }, { status: 404 });
-    }
 
-    // 4. Instansiasi Domain OOP & validasi ketersediaan
     const garasiDomain = Garasi.fromRow(garasiRow);
     if (!garasiDomain.isAvailable()) {
       return NextResponse.json(
@@ -119,41 +169,68 @@ export async function POST(request: Request) {
     }
 
     const kendaraanDomain = new Kendaraan({
-      id: kendaraanRow.id,
-      penyewaId: kendaraanRow.penyewa_id,
-      tipe: kendaraanRow.tipe,
-      noPlat: kendaraanRow.no_plat,
-      merekTipe: kendaraanRow.merek_tipe,
-      kapasitasMaxKwh: kendaraanRow.kapasitas_max_kwh ? Number(kendaraanRow.kapasitas_max_kwh) : null,
-      bateraiTerakhirKwh: kendaraanRow.baterai_terakhir_kwh ? Number(kendaraanRow.baterai_terakhir_kwh) : null,
+      penyewaId: session.userId,
+      tipe: tipeKendaraan,
+      noPlat: formattedPlat,
+      merekTipe,
+      kapasitasMaxKwh: maxKwh,
+      bateraiTerakhirKwh,
     });
 
-    // 5. Hitung rincian tarif via GaragePricingService
+    // 6. Hitung tanggal & tarif (tgl_mulai selalu hari ini)
     const pricingService = new GaragePricingService();
-    const startDate = parseDateOnly(tglMulaiStr);
-    const endDate =
-      tipeSewaInput === 'BULANAN' && !tglSelesaiStr
-        ? pricingService.hitungTanggalSelesaiBulanan(startDate)
-        : parseDateOnly(tglSelesaiStr);
+    const startDate = getTodayDateOnly();
+
+    let endDate: Date;
+    if (tipeSewa === 'HARIAN') {
+      const hari = Number(jumlahHariRaw);
+      if (!hari || hari < 1 || !Number.isInteger(hari)) {
+        return NextResponse.json({ error: 'Jumlah hari tidak valid.' }, { status: 400 });
+      }
+      endDate = pricingService.hitungTanggalSelesaiHarian(startDate, hari);
+    } else {
+      endDate = pricingService.hitungTanggalSelesaiBulanan(startDate);
+    }
 
     const rincian = pricingService.hitungRincianSewa(
       garasiDomain,
       kendaraanDomain,
       startDate,
       endDate,
-      tipeSewaInput
+      tipeSewa
     );
 
-    // 6. Upload bukti pelunasan ke Supabase Storage
+    // 7. Simpan data kendaraan ke tabel kendaraan
+    const { data: kendaraanRow, error: kendaraanError } = await supabaseAdmin
+      .from('kendaraan')
+      .insert({
+        penyewa_id: session.userId,
+        tipe: tipeKendaraan,
+        no_plat: formattedPlat,
+        merek_tipe: merekTipe,
+        kapasitas_max_kwh: maxKwh,
+        baterai_terakhir_kwh: bateraiTerakhirKwh,
+      })
+      .select('id')
+      .single();
+
+    if (kendaraanError || !kendaraanRow) {
+      return NextResponse.json(
+        { error: kendaraanError?.message ?? 'Gagal menyimpan data kendaraan.' },
+        { status: 500 }
+      );
+    }
+
+    // 8. Upload bukti pelunasan ke Supabase Storage
     const buktiUrl = await uploadBuktiBayar(buktiFile, `sewa-u${session.userId}`);
 
-    // 7. Simpan transaksi sewa ke database
+    // 9. Simpan transaksi sewa
     const { data: transaksi, error: insertError } = await supabaseAdmin
       .from('transaksi_sewa')
       .insert({
         penyewa_id: session.userId,
         garasi_id: garasiId,
-        kendaraan_id: kendaraanId,
+        kendaraan_id: kendaraanRow.id,
         tipe_sewa: rincian.tipeSewa,
         jumlah_hari: rincian.jumlahHari,
         tgl_mulai: formatDateOnly(startDate),
@@ -171,7 +248,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: insertError.message }, { status: 500 });
     }
 
-    // 8. Ubah status garasi menjadi USED melalui method OOP
+    // 10. Ubah status garasi menjadi USED
     garasiDomain.ubahStatus('USED');
     await supabaseAdmin
       .from('garasi')
@@ -183,7 +260,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(
       {
-        message: 'Transaksi sewa berhasil dibuat dan garasi aktif digunakan.',
+        message: `Sewa garasi ${garasiDomain.getKodeGarasi()} berhasil! Status garasi kini USED.`,
         transaksi,
       },
       { status: 201 }
